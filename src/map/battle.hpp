@@ -464,6 +464,8 @@ struct Battle_Config
 	int character_size; // if riders have size=2, and baby class riders size=1 [Lupus]
 	int mob_max_skilllvl; // Max possible skill level [Lupus]
 	int rare_drop_announce; // chance <= to show rare drops global announces
+	int showrare_max_rate; // maximum rate allowed when using @showrare [Salepate]
+	int showrare_play_sound; // play custom notification (with @showrare enabled) [Salepate]
 	int drop_rate_cap;  // Drop rate can't be raised above this amount by drop bonus items
 	int drop_rate_cap_vip;
 

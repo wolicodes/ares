@@ -10982,6 +10982,49 @@ ACMD_FUNC(setcard)
 	return 0;
 }
 
+/*==========================================
+ * @showrare by Salepate
+ * usage: @showrare <rate in %>
+ * Sends a personal announcement when an item that has a drop rate lower than the specified rate is dropped.
+ * If Lupus Global announcement drop catches the event, this one will be ignored (except for the sound notification)
+ *------------------------------------------*/
+ACMD_FUNC(showrare)
+{
+	int rate;
+	nullpo_retr(-1, sd);
+	// no value specified -> toggle show rare (0/max)
+	if (!message || !*message)
+	{
+		if (sd->state.showrare)
+			rate = 0;
+		else
+			rate = battle_config.showrare_max_rate;
+	}
+	else {
+		double drate;
+		drate = atof(message);
+		rate = (int)(drate * 100);
+	}
+
+	if (rate < 0) rate = 0;
+	if (rate > battle_config.showrare_max_rate) rate = battle_config.showrare_max_rate;
+
+	sd->state.showrare = rate;
+
+	if (sd->state.showrare)
+	{
+		snprintf(atcmd_output, sizeof atcmd_output, msg_txt(sd, 1536), ((double)sd->state.showrare) / 100.); // Items with drop rates of %0.02f%% or less will be displayed.
+		clif_displaymessage(fd, atcmd_output);
+	}
+	else
+	{
+		clif_displaymessage(fd, msg_txt(sd, 1537)); // showrare is now off.
+	}
+
+	return 0;
+}
+
+
 #include <custom/atcommand.inc>
 
 /**
@@ -11311,6 +11354,7 @@ void atcommand_basecommands(void) {
 		ACMD_DEFR(enchantgradeui, ATCMD_NOCONSOLE|ATCMD_NOAUTOTRADE),
 		ACMD_DEFR(roulette, ATCMD_NOCONSOLE|ATCMD_NOAUTOTRADE),
 		ACMD_DEF(setcard),
+		ACMD_DEF(showrare) // some people paid for this
 	};
 	AtCommandInfo* atcommand;
 	int i;

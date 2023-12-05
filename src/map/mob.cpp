@@ -48,6 +48,8 @@ using namespace rathena;
 const t_tick MOB_MAX_DELAY = 24 * 3600 * 1000;
 #define RUDE_ATTACKED_COUNT 1	//After how many rude-attacks should the skill be used?
 
+const char* SHOWRARE_FILENAME = "raredrop.wav"; // filename used for @showrare [Salepate]
+
 // On official servers, monsters will only seek targets that are closer to walk to than their
 // search range. The search range is affected depending on if the monster is walking or not.
 // On some maps there can be a quite long path for just walking two cells in a direction and
@@ -90,6 +92,7 @@ MapDropDatabase map_drop_db;
  * Local prototype declaration   (only required thing)
  *------------------------------------------*/
 static TIMER_FUNC(mob_spawn_guardian_sub);
+static void mob_display_item_message(map_session_data*, uint32, char*, const char*);
 int mob_skill_id2skill_idx(int mob_id,uint16 skill_id);
 
 /*========================================== [Playtester]
@@ -2896,6 +2899,7 @@ int mob_dead(struct mob_data *md, struct block_list *src, int type)
 		) )
 	{ // Item Drop
 		int drop_rate, drop_modifier = 100;
+		int rate_variant;
 
 #ifdef RENEWAL_DROP
 		drop_modifier = pc_level_penalty_mod( mvp_sd != nullptr ? mvp_sd : second_sd != nullptr ? second_sd : third_sd, PENALTY_DROP, nullptr, md );
@@ -2908,6 +2912,40 @@ int mob_dead(struct mob_data *md, struct block_list *src, int type)
 		dlist->first_charid = (mvp_sd ? mvp_sd->status.char_id : 0);
 		dlist->second_charid = (second_sd ? second_sd->status.char_id : 0);
 		dlist->third_charid = (third_sd ? third_sd->status.char_id : 0);
+		dlist->item = NULL;
+
+		for (i = 0; i < MAX_MOB_DROP_TOTAL; i++) {
+			if (md->db->dropitem[i].nameid == 0)
+				continue;
+
+			std::shared_ptr<item_data> it = item_db.find(md->db->dropitem[i].nameid);
+
+			if ( it == nullptr )
+				continue;
+			
+			drop_rate = mob_getdroprate(src, md->db, md->db->dropitem[i].rate, drop_modifier, md);
+
+			// attempt to drop the item
+			if (rnd() % 10000 >= drop_rate)
+				continue;
+
+			if( mvp_sd && it->type == IT_PETEGG ) {
+				pet_create_egg(mvp_sd, md->db->dropitem[i].nameid);
+				continue;
+			}
+
+			ditem = mob_setdropitem(&md->db->dropitem[i], 1, md->mob_id);
+			rate_variant = battle_config.autoloot_adjust ? drop_rate : md->db->dropitem[i].rate;
+
+			// Custom drop messages (global/showrare)
+			if (mvp_sd && (battle_config.rare_drop_announce > 0 || mvp_sd->state.showrare > 0))
+			{
+				mob_display_item_message(mvp_sd, rate_variant, md->name, it->ename.c_str());
+			}
+			// Announce first, or else ditem will be freed. [Lance]
+			// By popular demand, use base drop rate for autoloot code. [Skotlex]
+			mob_item_drop(md, dlist, ditem, 0, rate_variant, homkillonly || merckillonly);
+		}
 
 		// Ore Discovery [Celest]
 		if (sd == mvp_sd && pc_checkskill(sd,BS_FINDINGORE)>0 && battle_config.finding_ore_rate/10 >= rnd()%10000) {
@@ -3001,6 +3039,7 @@ int mob_dead(struct mob_data *md, struct block_list *src, int type)
 
 		// Process map specific drops
 		std::shared_ptr<s_map_drops> mapdrops;
+		std::shared_ptr<item_data> it2;
 
 		// If it is an instance map, we check for map specific drops of the original map
 		if( map[md->bl.m].instance_id > 0 ){
@@ -3016,6 +3055,16 @@ int mob_dead(struct mob_data *md, struct block_list *src, int type)
 					// 'Cheat' for autoloot command: rate is changed from n/100000 to n/10000
 					int32 map_drops_rate = max(1, (it.second->rate / 10));
 					std::shared_ptr<s_item_drop> ditem = mob_setdropitem(*it.second, 1, md->mob_id);
+
+					if (mvp_sd && (battle_config.rare_drop_announce > 0 || mvp_sd->state.showrare > 0))
+					{
+						it2 = item_db.find(md->db->dropitem[i].nameid);
+						if (it2 != nullptr)
+						{
+							mob_display_item_message(mvp_sd, map_drops_rate, md->name, it2->ename.c_str());
+						}
+					}
+					
 					mob_item_drop( md, dlist, ditem, 0, map_drops_rate, homkillonly || merckillonly );
 				}
 			}
@@ -3029,6 +3078,16 @@ int mob_dead(struct mob_data *md, struct block_list *src, int type)
 						// 'Cheat' for autoloot command: rate is changed from n/100000 to n/10000
 						int32 map_drops_rate = max(1, (it.second->rate / 10));
 						std::shared_ptr<s_item_drop> ditem = mob_setdropitem(*it.second, 1, md->mob_id);
+
+						if (mvp_sd && (battle_config.rare_drop_announce > 0 || mvp_sd->state.showrare > 0))
+						{
+							it2 = item_db.find(md->db->dropitem[i].nameid);
+							if (it2 != nullptr)
+							{
+								mob_display_item_message(mvp_sd, map_drops_rate, md->name, it2->ename.c_str());
+							}
+						}
+
 						mob_item_drop( md, dlist, ditem, 0, map_drops_rate, homkillonly || merckillonly );
 					}
 				}
@@ -4373,6 +4432,36 @@ int mob_clone_delete(struct mob_data *md){
 		return 1;
 	}
 	return 0;
+}
+
+/*==========================================
+ * Display a message when item is acquired [Salepate]
+ *------------------------------------------*/
+static void mob_display_item_message(map_session_data* sd, uint32 rate, char* mob_name, const char* item_name)
+{
+	if (!sd)
+	{
+		return;
+	}
+
+	struct block_list* src = (struct block_list*)sd;
+
+	if (rate <= battle_config.rare_drop_announce) { // Rare Drop Global Announce [Lupus]
+		char message[128];
+		sprintf(message, msg_txt(NULL, 541), sd->status.name, mob_name, item_name, (float)rate / 100); //MSG: "'%s' won %s's %s (chance: %0.02f%%)"
+		intif_broadcast(message, strlen(message) + 1, BC_DEFAULT);
+	}
+	else if (rate <= sd->state.showrare)  // @showrare [Salepate]
+	{
+		char message[128];
+		sprintf(message, msg_txt(NULL, 1538), mob_name, item_name, (float)rate / 100); // You got %s's %s (chance: %0.02f%%)!
+		clif_broadcast(src, message, strlen(message) + 1, 0, send_target::SELF);
+
+		if (battle_config.showrare_play_sound > 0)
+		{
+			clif_soundeffect(sd->bl, SHOWRARE_FILENAME, 0, send_target::SELF);
+		}
+	}
 }
 
 //Adjusts the drop rate of item according to the criteria given. [Skotlex]

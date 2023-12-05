@@ -1032,6 +1032,10 @@ Body:
   - Command: setcard 
     Help: |
       Adds a card or enchant to the specific slot of the equipment.
+  - Command: showrare
+    Help: |
+      Params: <off|#>
+      Display a personal message when a rare item is dropped.
 
 Footer:
   Imports:
